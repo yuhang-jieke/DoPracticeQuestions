@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Layout, Card, Tag, Typography, Spin, Empty, Pagination, Space, Button, Modal, Upload, App } from 'antd';
+import { Layout, Card, Tag, Typography, Spin, Empty, Pagination, Space, Button, Modal, Upload, App, Input } from 'antd';
 import type { UploadFile } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -37,6 +37,7 @@ const Home: React.FC = () => {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [scores, setScores] = useState<Record<string, QuestionScore>>({});
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -55,6 +56,7 @@ const Home: React.FC = () => {
     questionAPI
       .getAll({
         category_id: selectedCategory || undefined,
+        search: search || undefined,
         page,
         page_size: 15,
       })
@@ -70,7 +72,7 @@ const Home: React.FC = () => {
         }
       })
       .finally(() => setLoading(false));
-  }, [selectedCategory, page, isAuthenticated]);
+  }, [selectedCategory, page, search, isAuthenticated]);
 
   const handleCategoryClick = (categoryId?: string) => {
     setSelectedCategory(categoryId || '');
@@ -228,11 +230,19 @@ const Home: React.FC = () => {
       </Sider>
 
       <Content>
+        <Input.Search
+          placeholder="搜索题目..."
+          allowClear
+          onSearch={(value) => { setSearch(value); setPage(1); }}
+          style={{ marginBottom: 16, maxWidth: 480 }}
+        />
         <div style={{ marginBottom: 16 }}>
           <Title level={4} style={{ margin: 0 }}>
-            {selectedCategory
-              ? questions[0]?.category?.name || '题目列表'
-              : '全部题目'}
+            {search
+              ? `搜索"${search}"`
+              : selectedCategory
+                ? questions[0]?.category?.name || '题目列表'
+                : '全部题目'}
             <Text type="secondary" style={{ fontSize: 14, fontWeight: 400, marginLeft: 8 }}>
               共 {total} 题
             </Text>

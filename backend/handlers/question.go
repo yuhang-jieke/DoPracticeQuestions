@@ -15,10 +15,16 @@ func GetQuestions(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
+	search := c.Query("search")
+
 	query := database.DB.Model(&models.Question{}).Preload("Category")
 
 	if categoryID != "" {
 		query = query.Where("category_id = ?", categoryID)
+	}
+	if search != "" {
+		like := "%" + search + "%"
+		query = query.Where("title LIKE ? OR content LIKE ?", like, like)
 	}
 
 	var total int64

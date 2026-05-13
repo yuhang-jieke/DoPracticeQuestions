@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -164,12 +165,14 @@ func (c *AIConfig) realEvaluation(req *AIRequest) (*AIEvaluationResult, error) {
 	}
 
 	body, _ := json.Marshal(chatReq)
-	httpReq, _ := http.NewRequest("POST", c.APIURL, bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.APIURL, bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(httpReq)
+	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("AI请求失败: %w", err)
 	}

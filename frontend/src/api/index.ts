@@ -112,7 +112,7 @@ export const categoryAPI = {
 
 // Question API
 export const questionAPI = {
-  getAll: (params?: { category_id?: string; page?: number; page_size?: number }) =>
+  getAll: (params?: { category_id?: string; search?: string; page?: number; page_size?: number }) =>
     api.get<{ questions: Question[]; total: number; page: number; page_size: number }>('/questions', { params }),
   getById: (id: string) => api.get<{ question: Question }>(`/questions/${id}`),
 };

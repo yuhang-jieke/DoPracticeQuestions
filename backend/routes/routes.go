@@ -28,7 +28,7 @@ func Setup(r *gin.Engine) {
 		api.GET("/questions/:id", handlers.GetQuestion)
 
 		// Answers (auth required)
-		api.POST("/questions/:id/answers", middleware.AuthRequired(), handlers.SubmitAnswer)
+		api.POST("/questions/:id/answers", middleware.AuthRequired(), middleware.RateLimit(1), handlers.SubmitAnswer)
 		api.GET("/questions/:id/answers", middleware.AuthRequired(), handlers.GetUserAnswer)
 		api.GET("/answers/:id/history", middleware.AuthRequired(), handlers.GetAnswerHistory)
 
