@@ -1,0 +1,76 @@
+{
+  "categories": [
+    {
+      "name": "Go",
+      "type": "tech",
+      "keywords": ["go", "golang", "goroutine", "channel", "协程", "gmp", "gc", "逃逸", "interface", "切片", "映射", "context", "defer", "panic", "reflect", "并发", "同步原语", "互斥锁", "waitgroup", "原子操作", "内存模型", "调度器"]
+    },
+    {
+      "name": "数据库",
+      "type": "tech",
+      "keywords": ["mysql", "sql", "数据库", "索引", "事务", "存储引擎", "b+树", "锁", "隔离级别", "acid", "主从", "分库分表", "orm", "gorm", "sqlite", "postgresql", "tidb"]
+    },
+    {
+      "name": "Redis / 缓存",
+      "type": "tech",
+      "keywords": ["redis", "缓存", "memcached", "缓存雪崩", "缓存穿透", "缓存击穿", "分布式锁"]
+    },
+    {
+      "name": "算法",
+      "type": "tech",
+      "keywords": ["算法", "数据结构", "排序", "树", "图", "链表", "栈", "队列", "哈希", "堆", "动态规划", "递归", "二分", "bfs", "dfs", "复杂度", "时间复杂"]
+    },
+    {
+      "name": "云原生",
+      "type": "tech",
+      "keywords": ["kubernetes", "k8s", "docker", "容器", "pod", "service mesh", "istio", "helm", "云原生", "devops", "cicd", "jenkins", "gitlab", "prometheus", "grafana"]
+    },
+    {
+      "name": "系统设计",
+      "type": "tech",
+      "keywords": ["微服务", "分布式", "rpc", "服务发现", "负载均衡", "网关", "api网关", "消息队列", "kafka", "rabbitmq", "nats", "etcd", "consul", "cap", "base", "一致性", "raft", "paxos"]
+    },
+    {
+      "name": "计算机网络",
+      "type": "tech",
+      "keywords": ["tcp", "udp", "http", "https", "dns", "websocket", "网络", "ip", "socket", "三次握手", "四次挥手", "tls", "ssl", "quic", "grpc", "restful", "网络编程"]
+    },
+    {
+      "name": "操作系统",
+      "type": "tech",
+      "keywords": ["操作系统", "进程", "线程", "内存", "文件系统", "io", "epoll", "select", "poll", "零拷贝", "mmap", "调度", "linux", "shell"]
+    },
+    {
+      "name": "前端",
+      "type": "tech",
+      "keywords": ["前端", "react", "vue", "angular", "javascript", "typescript", "css", "html", "dom", "浏览器", "webpack", "vite", "nodejs", "node"]
+    },
+    {
+      "name": "架构设计",
+      "type": "tech",
+      "keywords": ["架构", "设计模式", "高并发", "高可用", "可扩展", "性能优化", "安全", "认证", "鉴权", "oauth", "jwt", "限流", "熔断", "降级", "灰度", "蓝绿部署"]
+    },
+    {
+      "name": "项目管理",
+      "type": "tech",
+      "keywords": ["敏捷", "scrum", "项目管理", "需求分析", "代码评审", "code review", "重构", "技术债", "单元测试", "集成测试", "tdd"]
+    },
+    {
+      "name": "Python",
+      "type": "tech",
+      "keywords": ["python", "django", "flask", "fastapi", "celery", "numpy", "pandas"]
+    },
+    {
+      "name": "Java",
+      "type": "tech",
+      "keywords": ["java", "spring", "spring boot", "jvm", "mybatis", "maven", "gradle", "tomcat"]
+    },
+    {
+      "name": "非技术类",
+      "type": "non-tech",
+      "keywords": ["hr", "人事", "薪资", "离职", "试用期", "面试技巧", "简历", "沟通", "团队协作", "职业规划", "行为面试", "情景面试"]
+    }
+  ],
+  "default_category": "综合技术",
+  "default_type": "tech"
+}
