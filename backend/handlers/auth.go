@@ -52,13 +52,14 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	token, _ := middleware.GenerateToken(user.ID, user.Username)
+	token, _ := middleware.GenerateToken(user.ID, user.Username, user.Role)
 	c.JSON(http.StatusCreated, gin.H{
 		"token": token,
 		"user": gin.H{
 			"id":       user.ID,
 			"username": user.Username,
 			"email":    user.Email,
+			"role":     user.Role,
 		},
 	})
 }
@@ -81,13 +82,14 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	token, _ := middleware.GenerateToken(user.ID, user.Username)
+	token, _ := middleware.GenerateToken(user.ID, user.Username, user.Role)
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
 			"id":       user.ID,
 			"username": user.Username,
 			"email":    user.Email,
+			"role":     user.Role,
 		},
 	})
 }
@@ -105,6 +107,7 @@ func GetMe(c *gin.Context) {
 			"id":         user.ID,
 			"username":   user.Username,
 			"email":      user.Email,
+			"role":       user.Role,
 			"created_at": user.CreatedAt,
 		},
 	})

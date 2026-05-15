@@ -44,9 +44,40 @@ func GetQuestions(c *gin.Context) {
 func GetQuestion(c *gin.Context) {
 	id := c.Param("id")
 	var question models.Question
-	if err := database.DB.Preload("Category").First(&question, id).Error; err != nil {
+	if err := database.DB.Preload("Category").Preload("Uploader").First(&question, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"question": question})
+}
+
+func DeleteQuestion(c *gin.Context) {
+	role := c.GetString("role")
+	userID := c.GetUint("user_id")
+
+	id := c.Param("id")
+	var question models.Question
+	if err := database.DB.First(&question, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
+		return
+	}
+
+	if role == "teacher" && (question.UploaderID == nil || *question.UploaderID != userID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "只能删除自己上传的题目"})
+		return
+	}
+
+	tx := database.DB.Begin()
+
+	tx.Where("user_answer_id IN (SELECT id FROM user_answers WHERE question_id = ?)", question.ID).Delete(&models.AnswerHistory{})
+	tx.Where("question_id = ?", question.ID).Delete(&models.UserAnswer{})
+	tx.Where("question_id = ?", question.ID).Delete(&models.TopAnswer{})
+	tx.Where("question_id = ?", question.ID).Delete(&models.Bookmark{})
+	tx.Delete(&question)
+
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "题目已删除"})
 }

@@ -40,6 +40,10 @@ func NewCategoryMatcher(path string) (*CategoryMatcher, error) {
 	}, nil
 }
 
+func (m *CategoryMatcher) IsDefault(name string) bool {
+	return name == m.defCat
+}
+
 func (m *CategoryMatcher) Match(tags, content string) (categoryName, categoryType string) {
 	searchText := strings.ToLower(tags + " " + content)
 	for _, rule := range m.rules {

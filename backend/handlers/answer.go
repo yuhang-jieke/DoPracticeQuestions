@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -59,21 +60,12 @@ func SubmitAnswer(c *gin.Context) {
 	var existing models.UserAnswer
 	hasExisting := database.DB.Where("user_id = ? AND question_id = ?", userID, questionID).First(&existing).RowsAffected > 0
 
-	// Get reference answers (top 5) for AI
-	var referenceAnswers []string
-	var refTop []models.TopAnswer
-	database.DB.Where("question_id = ?", questionID).Order("score desc").Limit(5).Find(&refTop)
-	for _, ta := range refTop {
-		referenceAnswers = append(referenceAnswers, ta.Content)
-	}
-
 	aiReq := &services.AIRequest{
-		QuestionTitle:    question.Title,
-		QuestionContent:  question.Content,
-		UserAnswer:       input.Content,
-		QuestionType:     string(question.Type),
-		ReferenceAnswers: referenceAnswers,
-		IsEdit:           hasExisting,
+		QuestionTitle:   question.Title,
+		QuestionContent: question.Content,
+		UserAnswer:      input.Content,
+		QuestionType:    string(question.Type),
+		IsEdit:          hasExisting,
 	}
 
 	if hasExisting {
@@ -237,4 +229,162 @@ func syncTopAnswers(questionID uint) {
 			database.DB.Delete(&ta)
 		}
 	}
+}
+
+func SubmitAnswerStream(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	questionID := c.Param("id")
+
+	var input SubmitAnswerInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入回答内容"})
+		return
+	}
+
+	var question models.Question
+	if err := database.DB.First(&question, questionID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在"})
+		return
+	}
+
+	aiCfg, err := getUserAIConfig(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取用户配置失败"})
+		return
+	}
+	if aiCfg == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先在个人中心配置您的 AI 接口"})
+		return
+	}
+
+	var existing models.UserAnswer
+	hasExisting := database.DB.Where("user_id = ? AND question_id = ?", userID, questionID).First(&existing).RowsAffected > 0
+
+	aiReq := &services.AIRequest{
+		QuestionTitle:   question.Title,
+		QuestionContent: question.Content,
+		UserAnswer:      input.Content,
+		QuestionType:    string(question.Type),
+		IsEdit:          hasExisting,
+	}
+	if hasExisting {
+		aiReq.PreviousAnswer = existing.Content
+		aiReq.PreviousScore = &existing.Score
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "不支持流式响应"})
+		return
+	}
+
+	var finalScore float64
+	var finalQualified bool
+	fields := map[string]string{"analysis": "", "strengths": "", "weaknesses": "", "improvements": "", "reference": ""}
+
+	writeEvent := func(event, data string) {
+		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, data)
+		flusher.Flush()
+	}
+
+	err = aiCfg.EvaluateAnswerStream(aiReq, func(ev services.StreamEvent) error {
+		switch ev.Type {
+		case "score":
+			d, _ := json.Marshal(ev.Data)
+			writeEvent("score", string(d))
+			if m, ok := ev.Data.(map[string]interface{}); ok {
+				if s, ok := m["score"].(float64); ok {
+					finalScore = s
+				}
+				if q, ok := m["is_qualified"].(bool); ok {
+					finalQualified = q
+				}
+			}
+		case "chunk":
+			d, _ := json.Marshal(ev.Data)
+			writeEvent("chunk", string(d))
+			if m, ok := ev.Data.(map[string]interface{}); ok {
+				if f, ok := m["field"].(string); ok {
+					if t, ok := m["text"].(string); ok {
+						fields[f] += t
+					}
+				}
+			}
+		case "done":
+		}
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("stream evaluation failed: %v", err)
+		writeEvent("error", `{"message":"AI评估失败"}`)
+		return
+	}
+
+	finalScore = clampScore(finalScore)
+
+	if hasExisting {
+		oldScore := existing.Score
+		oldContent := existing.Content
+		aiFeedback, _ := json.Marshal(map[string]interface{}{
+			"score": finalScore, "analysis": fields["analysis"],
+			"strengths": fields["strengths"], "weaknesses": fields["weaknesses"],
+			"reference_answer": fields["reference"], "improvements": fields["improvements"],
+		})
+		database.DB.Create(&models.AnswerHistory{
+			UserAnswerID: existing.ID, Content: oldContent,
+			Score: oldScore, AIFeedback: string(aiFeedback),
+		})
+		existing.Content = input.Content
+		existing.Score = finalScore
+		existing.PreviousScore = &oldScore
+		existing.IsQualified = finalQualified
+		database.DB.Save(&existing)
+	} else {
+		answer := models.UserAnswer{
+			UserID: userID, QuestionID: question.ID,
+			Content: input.Content, Score: finalScore,
+			IsQualified: finalQualified,
+		}
+		database.DB.Create(&answer)
+		aiFeedback, _ := json.Marshal(map[string]interface{}{
+			"score": finalScore, "analysis": fields["analysis"],
+			"strengths": fields["strengths"], "weaknesses": fields["weaknesses"],
+			"reference_answer": fields["reference"], "improvements": fields["improvements"],
+		})
+		database.DB.Create(&models.AnswerHistory{
+			UserAnswerID: answer.ID, Content: input.Content,
+			Score: finalScore, AIFeedback: string(aiFeedback),
+		})
+		database.DB.Model(&question).UpdateColumn("answer_count", question.AnswerCount+1)
+	}
+
+	syncTopAnswers(question.ID)
+
+	scoreDrop := false
+	var scoreDropMsg string
+	if hasExisting && finalScore < *aiReq.PreviousScore {
+		scoreDrop = true
+		scoreDropMsg = "注意：本次评分低于您之前的评分，建议查看AI分析了解具体哪些方面有所不足。"
+	}
+
+	doneData, _ := json.Marshal(map[string]interface{}{
+		"score_drop":     scoreDrop,
+		"score_drop_msg": scoreDropMsg,
+		"has_existing":   hasExisting,
+		"previous_score": aiReq.PreviousScore,
+	})
+	writeEvent("done", string(doneData))
+}
+
+func clampScore(s float64) float64 {
+	if s <= 0 {
+		return 5
+	}
+	return s
 }

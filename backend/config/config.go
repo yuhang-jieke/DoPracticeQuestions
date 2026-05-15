@@ -32,15 +32,15 @@ func (c *Config) DSN() string {
 func Load() *Config {
 	cfg := &Config{
 		MySQL: MySQLConfig{
-			Host:     "115.190.57.118",
+			Host:     "127.0.0.1",
 			Port:     3306,
 			User:     "root",
-			Password: "4ay1nkal3u8ed77y",
+			Password: "",
 			Database: "Do-Practice-Questions",
 		},
-		JWTSecret:  "your-secret-key-change-in-production",
+		JWTSecret:  "",
 		AIApiKey:   "",
-		AIApiURL:   "https://api.deepseek.com",
+		AIApiURL:   "https://api.deepseek.com/chat/completions",
 		AIModel:    "deepseek-chat",
 		ServerPort: "8080",
 		UseMockAI:  true,

@@ -8,8 +8,10 @@ import (
 
 	"interview-platform/database"
 	"interview-platform/models"
+	"interview-platform/services"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func GetUserAnswers(c *gin.Context) {
@@ -156,6 +158,11 @@ func GetQuestionScores(c *gin.Context) {
 }
 
 func GetUserUploads(c *gin.Context) {
+	role := c.GetString("role")
+	if role != "teacher" && role != "director" && role != "principal" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权访问"})
+		return
+	}
 	userID := c.GetUint("user_id")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
@@ -186,9 +193,7 @@ func GetAIConfig(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"ai_api_key": user.AIApiKey,
-		"ai_api_url": user.AIApiURL,
-		"ai_model":   user.AIModel,
+		"has_config": user.AIApiKey != "" && user.AIApiURL != "",
 	})
 }
 
@@ -204,10 +209,72 @@ func UpdateAIConfig(c *gin.Context) {
 		return
 	}
 
+	// 获取已存储的配置，空字段用已存值兜底
+	var user models.User
+	if err := database.DB.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		return
+	}
+	key := input.AIApiKey
+	if key == "" {
+		key = user.AIApiKey
+	}
+	url := input.AIApiURL
+	if url == "" {
+		url = user.AIApiURL
+	}
+	model := input.AIModel
+	if model == "" {
+		model = user.AIModel
+	}
+
+	if key == "" || url == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "首次配置需要填写 API Key 和 API 地址"})
+		return
+	}
+
+	cfg := services.NewAIConfig(key, url, model, false)
+	if err := cfg.TestConnection(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "连接测试失败: " + err.Error()})
+		return
+	}
+
 	database.DB.Model(&models.User{}).Where("id = ?", userID).Updates(map[string]any{
-		"ai_api_key": input.AIApiKey,
-		"ai_api_url": input.AIApiURL,
-		"ai_model":   input.AIModel,
+		"ai_api_key": key,
+		"ai_api_url": url,
+		"ai_model":   model,
 	})
 	c.JSON(http.StatusOK, gin.H{"message": "AI 配置已保存"})
+}
+
+func ChangePassword(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	var input struct {
+		OldPassword string `json:"old_password" binding:"required"`
+		NewPassword string `json:"new_password" binding:"required,min=6"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少6位"})
+		return
+	}
+	if input.OldPassword == input.NewPassword {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码不能与旧密码相同"})
+		return
+	}
+	var user models.User
+	if database.DB.First(&user, userID).Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.OldPassword)) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "原密码错误"})
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "修改失败"})
+		return
+	}
+	database.DB.Model(&user).Update("password_hash", string(hash))
+	c.JSON(http.StatusOK, gin.H{"message": "密码已修改"})
 }

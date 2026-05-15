@@ -6,8 +6,8 @@
     "password": "4ay1nkal3u8ed77y",
     "database": "Do-Practice-Questions"
   },
-  "ai_api_key": "sk-84d2c70f00e846ecb70ba5d8f52f3ea0",
-  "ai_api_url": "https://api.deepseek.com",
-  "ai_model": "deepseek-chat",
+  "jwt_secret": "local-dev-secret-2026",
+  "ai_api_url": "",
+  "ai_model": "",
   "use_mock_ai": false
 }

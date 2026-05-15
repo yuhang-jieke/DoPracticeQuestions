@@ -1,23 +1,22 @@
 import React from 'react';
-import { Layout as AntLayout, Menu, Button, Space, Dropdown, Typography } from 'antd';
-import { Link, Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { Layout as AntLayout, Button, Space, Dropdown, Typography, Grid } from 'antd';
+import { Link, Outlet, useNavigate } from 'react-router-dom';
 import {
-  MenuOutlined,
   UserOutlined,
   LogoutOutlined,
   BookOutlined,
-  HomeOutlined,
-  BarChartOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../store/auth';
 
 const { Header, Content, Footer } = AntLayout;
 const { Text } = Typography;
+const { useBreakpoint } = Grid;
 
 const AppLayout: React.FC = () => {
   const { isAuthenticated, user, logout } = useAuthStore();
   const navigate = useNavigate();
-  const location = useLocation();
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
 
   const handleLogout = () => {
     logout();
@@ -45,7 +44,7 @@ const AppLayout: React.FC = () => {
       <Header
         style={{
           background: '#fff',
-          padding: '0 40px',
+          padding: isMobile ? '0 12px' : '0 40px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -56,42 +55,51 @@ const AppLayout: React.FC = () => {
           boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
         }}
       >
-        <Space size={24}>
-          <Link to="/" style={{ textDecoration: 'none' }}>
-            <Space>
-              <BookOutlined style={{ fontSize: 24, color: '#1677ff' }} />
-              <Text strong style={{ fontSize: 18, color: '#1677ff' }}>
-                面试刷题
-              </Text>
-            </Space>
-          </Link>
-        </Space>
+        <Link to="/" style={{ textDecoration: 'none' }}>
+          <Space size={8}>
+            <BookOutlined style={{ fontSize: isMobile ? 20 : 24, color: '#1677ff' }} />
+            <Text strong style={{ fontSize: isMobile ? 15 : 18, color: '#1677ff' }}>
+              面试刷题
+            </Text>
+          </Space>
+        </Link>
 
-        <Space size={16}>
+        <Space size={isMobile ? 4 : 16}>
+          {(user?.role === 'teacher' || user?.role === 'director' || user?.role === 'principal') && (
+            <>
+              <Button type="link" size={isMobile ? 'small' : 'middle'} onClick={() => navigate('/teacher')}>
+                教师后台
+              </Button>
+              <Button type="link" size={isMobile ? 'small' : 'middle'} onClick={() => navigate('/classes')}>
+                班级管理
+              </Button>
+            </>
+          )}
+          {(user?.role === 'director' || user?.role === 'principal') && (
+            <Button type="link" size={isMobile ? 'small' : 'middle'} onClick={() => navigate('/admin')}>
+              系统管理
+            </Button>
+          )}
           {isAuthenticated ? (
             <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
-              <Button type="text" icon={<UserOutlined />}>
-                {user?.username || '用户'}
+              <Button type="text" size={isMobile ? 'small' : 'middle'} icon={<UserOutlined />}>
+                {isMobile ? '' : user?.username || '用户'}
               </Button>
             </Dropdown>
           ) : (
-            <Space>
-              <Button type="text" onClick={() => navigate('/login')}>
-                登录
-              </Button>
-              <Button type="primary" onClick={() => navigate('/register')}>
-                注册
-              </Button>
+            <Space size={4}>
+              <Button type="text" size={isMobile ? 'small' : 'middle'} onClick={() => navigate('/login')}>登录</Button>
+              <Button type="primary" size={isMobile ? 'small' : 'middle'} onClick={() => navigate('/register')}>注册</Button>
             </Space>
           )}
         </Space>
       </Header>
 
-      <Content style={{ padding: '24px 40px', maxWidth: 1200, margin: '0 auto', width: '100%' }}>
+      <Content style={{ padding: isMobile ? '12px' : '24px 40px', maxWidth: 1200, margin: '0 auto', width: '100%' }}>
         <Outlet />
       </Content>
 
-      <Footer style={{ textAlign: 'center', color: '#999', background: '#f5f5f5', padding: '16px' }}>
+      <Footer style={{ textAlign: 'center', color: '#999', background: '#f5f5f5', padding: isMobile ? '12px' : '16px' }}>
         面试刷题平台 ©2026
       </Footer>
     </AntLayout>

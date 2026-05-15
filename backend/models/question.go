@@ -27,8 +27,10 @@ type Question struct {
 	Difficulty   Difficulty   `gorm:"size:20;not null;default:medium" json:"difficulty"`
 	Type         QuestionType `gorm:"size:20;not null;default:tech" json:"type"`
 	AnswerCount  int          `gorm:"default:0" json:"answer_count"`
-	UploaderID   *uint        `json:"uploader_id,omitempty"`
-	Uploader     *User        `gorm:"foreignKey:UploaderID" json:"uploader,omitempty"`
-	CreatedAt    time.Time    `json:"created_at"`
-	UpdatedAt    time.Time    `json:"updated_at"`
+	UploaderID       *uint        `json:"uploader_id,omitempty"`
+	Uploader         *User        `gorm:"foreignKey:UploaderID" json:"uploader,omitempty"`
+	ErrorAnalysis    string       `gorm:"type:text" json:"error_analysis,omitempty"`
+	ErrorAnalysisAt  *time.Time   `json:"error_analysis_at,omitempty"`
+	CreatedAt        time.Time    `json:"created_at"`
+	UpdatedAt        time.Time    `json:"updated_at"`
 }

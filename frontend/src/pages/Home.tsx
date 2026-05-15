@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Layout, Card, Tag, Typography, Spin, Empty, Pagination, Space, Button, Modal, Upload, App, Input } from 'antd';
-import type { UploadFile } from 'antd';
+import { Layout, Card, Tag, Typography, Spin, Empty, Pagination, Space, Button, Modal, Upload, App, Input, Drawer, Grid } from 'antd';
+
 import { useNavigate } from 'react-router-dom';
 import {
   CodeOutlined,
@@ -13,7 +13,7 @@ import {
   InboxOutlined,
 } from '@ant-design/icons';
 import { questionAPI, categoryAPI, userAPI, uploadAPI } from '../api';
-import type { Category, Question, QuestionScore } from '../api';
+import type { Category, Question, QuestionScore, PreviewRow } from '../api';
 import { useAuthStore } from '../store/auth';
 
 const { Sider, Content } = Layout;
@@ -43,9 +43,17 @@ const Home: React.FC = () => {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const { isAuthenticated } = useAuthStore();
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
+  const [previewChecked, setPreviewChecked] = useState<Set<number>>(new Set());
+  const [previewSummary, setPreviewSummary] = useState<{ valid: number; rewritten: number; invalid: number; total: number; importable: number } | null>(null);
+  const [allCategories, setAllCategories] = useState<string[]>([]);
+  const { isAuthenticated, user } = useAuthStore();
   const navigate = useNavigate();
   const { message } = App.useApp();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     categoryAPI.getAll().then((res) => setCategories(res.data.categories));
@@ -79,30 +87,72 @@ const Home: React.FC = () => {
     setPage(1);
   };
 
-  const handleUpload = async () => {
-    if (!isAuthenticated) {
-      message.warning('请先登录');
-      navigate('/login');
-      return;
-    }
-    if (!uploadFile) {
-      message.warning('请选择文件');
-      return;
-    }
+  const handlePreview = async () => {
+    if (!isAuthenticated) { message.warning('请先登录'); navigate('/login'); return; }
+    if (!uploadFile) { message.warning('请选择文件'); return; }
     setUploading(true);
     try {
-      const res = await uploadAPI.uploadQuestions(uploadFile);
-      message.success(res.data.message);
+      const res = await uploadAPI.previewUpload(uploadFile);
+      setPreviewRows(res.data.preview);
+      setPreviewSummary(res.data.summary);
+      const checked = new Set<number>();
+      res.data.preview.forEach((r) => {
+        if (r.status !== 'invalid') checked.add(r.index);
+      });
+      setPreviewChecked(checked);
+      const catRes = await uploadAPI.getCategoryNames();
+      setAllCategories((catRes as any).data?.categories || []);
       setUploadOpen(false);
-      setUploadFile(null);
-      // Refresh question list
-      setPage(1);
-      setSelectedCategory('');
+      setPreviewOpen(true);
     } catch (err: any) {
-      message.error(err.response?.data?.error || '上传失败');
+      message.error(err.response?.data?.error || '解析失败');
     } finally {
       setUploading(false);
     }
+  };
+
+  const handleConfirmImport = async () => {
+    setUploading(true);
+    try {
+      const toImport = previewRows
+        .filter((r) => previewChecked.has(r.index))
+        .map((r) => ({ content: r.content, tags: r.tags, category: r.category, rewritten: r.rewritten }));
+      if (toImport.length === 0) { message.warning('请至少勾选一条题目'); setUploading(false); return; }
+      const res = await uploadAPI.confirmImport(toImport);
+      message.success(res.data.message);
+      setPreviewOpen(false);
+      setPreviewRows([]);
+      setPreviewChecked(new Set());
+      setPreviewSummary(null);
+      setUploadFile(null);
+      setPage(1);
+      setSelectedCategory('');
+    } catch (err: any) {
+      message.error(err.response?.data?.error || '导入失败');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const updatePreviewCategory = (index: number, category: string) => {
+    setPreviewRows((prev) => prev.map((r) => (r.index === index ? { ...r, category } : r)));
+  };
+
+  const updatePreviewRewritten = (index: number, rewritten: string) => {
+    setPreviewRows((prev) => prev.map((r) => (r.index === index ? { ...r, rewritten } : r)));
+  };
+
+  const togglePreviewCheck = (index: number) => {
+    setPreviewChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index); else next.add(index);
+      return next;
+    });
+  };
+
+  const toggleAll = (checked: boolean) => {
+    if (checked) setPreviewChecked(new Set(previewRows.map((r) => r.index)));
+    else setPreviewChecked(new Set());
   };
 
   const renderCategoryTree = (cats: Category[], parentType?: string) => (
@@ -187,18 +237,19 @@ const Home: React.FC = () => {
 
   return (
     <Layout style={{ background: 'transparent', gap: 24 }}>
-      <Sider
-        width={240}
-        style={{
-          background: '#fff',
-          borderRadius: 8,
-          padding: '12px 0',
-          boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
-          height: 'fit-content',
-          position: 'sticky',
-          top: 80,
-        }}
-      >
+      {!isMobile && (
+        <Sider
+          width={240}
+          style={{
+            background: '#fff',
+            borderRadius: 8,
+            padding: '12px 0',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
+            height: 'fit-content',
+            position: 'sticky',
+            top: 80,
+          }}
+        >
         <div
           onClick={() => handleCategoryClick()}
           style={{
@@ -217,19 +268,31 @@ const Home: React.FC = () => {
         </div>
         {renderCategoryTree(techCategories, 'tech')}
         {renderCategoryTree(nonTechCategories, 'non-tech')}
-        <div style={{ borderTop: '1px solid #f0f0f0', margin: '8px 16px 0', padding: '12px 0' }}>
-          <Button
-            type="dashed"
-            icon={<UploadOutlined />}
-            block
-            onClick={() => setUploadOpen(true)}
-          >
-            上传题目
-          </Button>
-        </div>
+        {(user?.role === 'teacher' || user?.role === 'director' || user?.role === 'principal') && (
+          <div style={{ borderTop: '1px solid #f0f0f0', margin: '8px 16px 0', padding: '12px 0' }}>
+            <Button
+              type="dashed"
+              icon={<UploadOutlined />}
+              block
+              onClick={() => setUploadOpen(true)}
+            >
+              上传题目
+            </Button>
+          </div>
+        )}
       </Sider>
+      )}
 
       <Content>
+        {isMobile && (
+          <Button
+            block
+            style={{ marginBottom: 12 }}
+            onClick={() => setDrawerOpen(true)}
+          >
+            📂 分类筛选
+          </Button>
+        )}
         <Input.Search
           placeholder="搜索题目..."
           allowClear
@@ -332,8 +395,8 @@ const Home: React.FC = () => {
           <Button key="cancel" onClick={() => { setUploadOpen(false); setUploadFile(null); }}>
             取消
           </Button>,
-          <Button key="upload" type="primary" loading={uploading} onClick={handleUpload}>
-            上传
+          <Button key="preview" type="primary" loading={uploading} onClick={handlePreview}>
+            预览
           </Button>,
         ]}
       >
@@ -355,6 +418,117 @@ const Home: React.FC = () => {
           </Upload.Dragger>
         </Space>
       </Modal>
+
+      <Modal
+        title="预览导入"
+        open={previewOpen}
+        onCancel={() => { setPreviewOpen(false); setPreviewRows([]); setPreviewChecked(new Set()); setPreviewSummary(null); }}
+        width={1000}
+        footer={[
+          <Button key="cancel" onClick={() => { setPreviewOpen(false); setPreviewRows([]); setPreviewChecked(new Set()); setPreviewSummary(null); }}>
+            取消
+          </Button>,
+          <Button key="import" type="primary" loading={uploading} onClick={handleConfirmImport}>
+            确认导入（{previewChecked.size} 条）
+          </Button>,
+        ]}
+      >
+        {previewSummary && (
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+            <Card size="small" style={{ flex: 1, textAlign: 'center', borderLeft: '3px solid #52c41a' }}>
+              <div style={{ fontSize: 20, fontWeight: 600, color: '#52c41a' }}>{previewSummary.valid}</div>
+              <div style={{ fontSize: 12, color: '#999' }}>✅ 合格</div>
+            </Card>
+            <Card size="small" style={{ flex: 1, textAlign: 'center', borderLeft: '3px solid #1677ff' }}>
+              <div style={{ fontSize: 20, fontWeight: 600, color: '#1677ff' }}>{previewSummary.rewritten}</div>
+              <div style={{ fontSize: 12, color: '#999' }}>✏️ AI改写</div>
+            </Card>
+            <Card size="small" style={{ flex: 1, textAlign: 'center', borderLeft: '3px solid #ff4d4f' }}>
+              <div style={{ fontSize: 20, fontWeight: 600, color: '#ff4d4f' }}>{previewSummary.invalid}</div>
+              <div style={{ fontSize: 12, color: '#999' }}>❌ 无效（默认不导入）</div>
+            </Card>
+            <Card size="small" style={{ flex: 1, textAlign: 'center', background: '#f6ffed' }}>
+              <div style={{ fontSize: 20, fontWeight: 600, color: '#1677ff' }}>{previewSummary.importable}</div>
+              <div style={{ fontSize: 12, color: '#999' }}>可导入共计</div>
+            </Card>
+          </div>
+        )}
+        <div style={{ maxHeight: 400, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: '#fafafa' }}>
+                <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '2px solid #f0f0f0', width: 40 }}>
+                  <input type="checkbox" checked={previewRows.length > 0 && previewRows.every((r) => previewChecked.has(r.index))} onChange={(e) => toggleAll(e.target.checked)} />
+                </th>
+                <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '2px solid #f0f0f0', width: 40 }}>#</th>
+                <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '2px solid #f0f0f0' }}>原始内容</th>
+                <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '2px solid #f0f0f0', minWidth: 180 }}>AI 改写 / 无效原因</th>
+                <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '2px solid #f0f0f0', minWidth: 100 }}>分类</th>
+                <th style={{ padding: '8px 12px', textAlign: 'center', borderBottom: '2px solid #f0f0f0', width: 70 }}>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {previewRows.map((r) => (
+                <tr key={r.index} style={{ background: r.status === 'invalid' && !previewChecked.has(r.index) ? '#fff7f7' : undefined }}>
+                  <td style={{ padding: '8px 6px', borderBottom: '1px solid #f5f5f5', textAlign: 'center' }}>
+                    <input type="checkbox" checked={previewChecked.has(r.index)} onChange={() => togglePreviewCheck(r.index)} />
+                  </td>
+                  <td style={{ padding: '8px 12px', borderBottom: '1px solid #f5f5f5' }}>{r.index}</td>
+                  <td style={{ padding: '8px 12px', borderBottom: '1px solid #f5f5f5' }}>
+                    <Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0, maxWidth: 250 }}>{r.content}</Paragraph>
+                    {r.tags && <Text type="secondary" style={{ fontSize: 11 }}>标签：{r.tags}</Text>}
+                  </td>
+                  <td style={{ padding: '4px 12px', borderBottom: '1px solid #f5f5f5' }}>
+                    {r.status === 'rewritten' ? (
+                      <Input.TextArea rows={2} value={r.rewritten} onChange={(e) => updatePreviewRewritten(r.index, e.target.value)} style={{ fontSize: 12 }} />
+                    ) : r.status === 'invalid' ? (
+                      <Text type="danger" style={{ fontSize: 12 }}>{r.reason}</Text>
+                    ) : (
+                      <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+                    )}
+                  </td>
+                  <td style={{ padding: '4px 12px', borderBottom: '1px solid #f5f5f5' }}>
+                    <select
+                      value={r.category}
+                      onChange={(e) => updatePreviewCategory(r.index, e.target.value)}
+                      style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid #d9d9d9', fontSize: 12 }}
+                    >
+                      {allCategories.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td style={{ padding: '8px 12px', borderBottom: '1px solid #f5f5f5', textAlign: 'center' }}>
+                    {r.status === 'valid' && <Tag color="green" style={{ fontSize: 11 }}>合格</Tag>}
+                    {r.status === 'rewritten' && <Tag color="blue" style={{ fontSize: 11 }}>已改写</Tag>}
+                    {r.status === 'invalid' && <Tag color="red" style={{ fontSize: 11 }}>无效</Tag>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Modal>
+
+      <Drawer
+        title="分类筛选"
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        styles={{ body: { padding: 0 } }}
+      >
+        <div onClick={() => { handleCategoryClick(); setDrawerOpen(false); }} style={{ padding: '8px 16px', cursor: 'pointer', fontWeight: selectedCategory === '' ? 600 : 400, color: selectedCategory === '' ? '#1677ff' : '#333', borderBottom: '1px solid #f0f0f0' }}>
+          📚 全部分类
+        </div>
+        {renderCategoryTree(techCategories, 'tech')}
+        {renderCategoryTree(nonTechCategories, 'non-tech')}
+        {(user?.role === 'teacher' || user?.role === 'director' || user?.role === 'principal') && (
+          <div style={{ borderTop: '1px solid #f0f0f0', margin: '8px 16px 0', padding: '12px 0' }}>
+            <Button type="dashed" icon={<UploadOutlined />} block onClick={() => { setDrawerOpen(false); setUploadOpen(true); }}>
+              上传题目
+            </Button>
+          </div>
+        )}
+      </Drawer>
     </Layout>
   );
 };

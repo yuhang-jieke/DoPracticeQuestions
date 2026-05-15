@@ -22,10 +22,9 @@ import {
   StarOutlined,
   StarFilled,
   MessageOutlined,
-  EditOutlined,
-  HistoryOutlined,
   AudioOutlined,
 } from '@ant-design/icons';
+import ReactMarkdown from 'react-markdown';
 import { questionAPI, answerAPI, topAnswerAPI, bookmarkAPI } from '../api';
 import type { Question, TopAnswer, Comment as CommentType } from '../api';
 import { useAuthStore } from '../store/auth';
@@ -48,9 +47,14 @@ const QuestionDetail: React.FC = () => {
   // Answer
   const [answer, setAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [streamScore, setStreamScore] = useState<number | null>(null);
+  const [streamQualified, setStreamQualified] = useState<boolean | null>(null);
+  const [streamFields, setStreamFields] = useState<Record<string, string>>({});
+  const [streamDone, setStreamDone] = useState(false);
+  const [streamMeta, setStreamMeta] = useState<any>(null);
   const [evaluation, setEvaluation] = useState<any>(null);
   const [hasExisting, setHasExisting] = useState(false);
-  const [existingAnswer, setExistingAnswer] = useState('');
   const [showEval, setShowEval] = useState(false);
 
   // Top answers
@@ -88,7 +92,6 @@ const QuestionDetail: React.FC = () => {
       answerAPI.getMyAnswer(id).then((res) => {
         if (res.data.answered && res.data.answer) {
           setHasExisting(true);
-          setExistingAnswer(res.data.answer.content);
           setAnswer(res.data.answer.content);
           if (res.data.answer.score) {
             // Restore previous AI evaluation from saved feedback
@@ -135,20 +138,48 @@ const QuestionDetail: React.FC = () => {
     if (!id) return;
 
     setSubmitting(true);
-    try {
-      const res = await answerAPI.submit(id, { content: answer });
-      setEvaluation(res.data);
-      setShowEval(true);
-      setHasExisting(true);
-      setExistingAnswer(answer);
-      message.success('提交成功');
+    setShowEval(true);
+    setStreaming(true);
+    setStreamScore(null);
+    setStreamQualified(null);
+    setStreamFields({ analysis: '', strengths: '', weaknesses: '', improvements: '', reference: '' });
+    setStreamDone(false);
+    setStreamMeta(null);
+    setEvaluation(null);
 
-      // Refresh top answers
-      const tRes = await topAnswerAPI.getByQuestion(id);
-      setTopAnswers(tRes.data.top_answers);
+    const fieldLabel: Record<string, string> = {
+      analysis: 'analysis', strengths: 'strengths', weaknesses: 'weaknesses',
+      improvements: 'improvements', reference: 'reference',
+    };
+
+    try {
+      await answerAPI.submitStream(id, { content: answer }, {
+        onScore: (score, isQualified) => {
+          setStreamScore(score);
+          setStreamQualified(isQualified);
+        },
+        onChunk: (field, text) => {
+          const key = fieldLabel[field] || 'analysis';
+          setStreamFields((prev) => ({ ...prev, [key]: (prev[key] || '') + text }));
+        },
+        onDone: (meta) => {
+          setStreamDone(true);
+          setStreamMeta(meta);
+          setHasExisting(true);
+          setStreaming(false);
+          setSubmitting(false);
+          // Refresh top answers
+          topAnswerAPI.getByQuestion(id).then((tRes) => setTopAnswers(tRes.data.top_answers));
+        },
+        onError: (msg) => {
+          message.error(msg);
+          setStreaming(false);
+          setSubmitting(false);
+        },
+      });
     } catch (err: any) {
-      message.error(err.response?.data?.error || '提交失败');
-    } finally {
+      message.error('提交失败');
+      setStreaming(false);
       setSubmitting(false);
     }
   };
@@ -234,6 +265,7 @@ const QuestionDetail: React.FC = () => {
               <Tag key={i} style={{ color: '#666', fontSize: 11 }}>{t.trim()}</Tag>
             ))}
             <Text type="secondary" style={{ fontSize: 12 }}>{question.answer_count} 人作答</Text>
+            {question.uploader && <Text type="secondary" style={{ fontSize: 12 }}>上传者：{question.uploader.username}</Text>}
           </Space>
         </div>
         <Title level={4} style={{ marginBottom: 16 }}>{question.title}</Title>
@@ -279,22 +311,26 @@ const QuestionDetail: React.FC = () => {
       </Card>
 
       {/* AI Evaluation */}
-      {showEval && evaluation && (
+      {showEval && (evaluation || streaming || streamScore !== null) && (
         <Card
           title={
             <Space>
               <span>AI 评估结果</span>
-              <Tag color={evaluation.is_qualified ? 'green' : 'red'}>
-                {evaluation.is_qualified ? '合格' : '需改进'}
-              </Tag>
+              {streamQualified !== null ? (
+                <Tag color={streamQualified ? 'green' : 'red'}>{streamQualified ? '合格' : '需改进'}</Tag>
+              ) : evaluation ? (
+                <Tag color={evaluation.is_qualified ? 'green' : 'red'}>{evaluation.is_qualified ? '合格' : '需改进'}</Tag>
+              ) : (
+                <Tag>分析中...</Tag>
+              )}
             </Space>
           }
-          style={{ borderRadius: 8, marginBottom: 16, borderLeft: `4px solid ${evaluation.is_qualified ? '#52c41a' : '#ff4d4f'}` }}
+          style={{ borderRadius: 8, marginBottom: 16, borderLeft: `4px solid ${(streamQualified ?? evaluation?.is_qualified) ? '#52c41a' : '#ff4d4f'}` }}
         >
-          {evaluation.score_drop && (
+          {(evaluation?.score_drop || streamMeta?.score_drop) && (
             <Alert
               type="warning"
-              message={evaluation.score_drop_msg}
+              message={(evaluation || streamMeta)?.score_drop_msg}
               style={{ marginBottom: 16 }}
               showIcon
             />
@@ -304,9 +340,13 @@ const QuestionDetail: React.FC = () => {
             <div style={{ textAlign: 'center' }}>
               <Progress
                 type="circle"
-                percent={Math.round((evaluation.score / 10) * 100)}
-                format={() => `${evaluation.score}/10`}
-                strokeColor={evaluation.score >= 7 ? '#52c41a' : '#ff4d4f'}
+                percent={Math.round(((streamScore ?? evaluation?.score ?? 0) / 10) * 100)}
+                format={() => {
+                  if (streamScore !== null) return `${streamScore}/10`;
+                  if (evaluation) return `${evaluation.score}/10`;
+                  return '--/10';
+                }}
+                strokeColor={(streamScore ?? evaluation?.score ?? 0) >= 7 ? '#52c41a' : '#ff4d4f'}
                 size={100}
               />
               <div style={{ marginTop: 8 }}>
@@ -314,40 +354,49 @@ const QuestionDetail: React.FC = () => {
               </div>
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ marginBottom: 12 }}>
-                <Text strong>综合分析：</Text>
-                <Paragraph style={{ margin: '4px 0' }}>{evaluation.analysis}</Paragraph>
-              </div>
-              {evaluation.strengths && (
+{(streamFields.analysis || evaluation?.analysis) && (
+                <div style={{ marginBottom: 12 }}>
+                  <Text strong>综合分析：</Text>
+                  <div style={{ margin: '4px 0', lineHeight: 1.8 }}>
+                    <ReactMarkdown>{streamFields.analysis || evaluation?.analysis || ''}</ReactMarkdown>
+                    {streaming && !streamDone && <Text type="secondary">▌</Text>}
+                  </div>
+                </div>
+              )}
+              {(streamFields.strengths || evaluation?.strengths) && (
                 <div style={{ marginBottom: 8 }}>
                   <Text style={{ color: '#52c41a' }}>✅ 优点：</Text>
-                  <Paragraph style={{ margin: '4px 0' }}>{evaluation.strengths}</Paragraph>
+                  <div style={{ margin: '4px 0', lineHeight: 1.8 }}>
+                    <ReactMarkdown>{streamFields.strengths || evaluation?.strengths || ''}</ReactMarkdown>
+                  </div>
                 </div>
               )}
-              {evaluation.weaknesses && (
+              {(streamFields.weaknesses || evaluation?.weaknesses) && (
                 <div style={{ marginBottom: 8 }}>
                   <Text style={{ color: '#ff4d4f' }}>📌 不足：</Text>
-                  <Paragraph style={{ margin: '4px 0' }}>{evaluation.weaknesses}</Paragraph>
+                  <div style={{ margin: '4px 0', lineHeight: 1.8 }}>
+                    <ReactMarkdown>{streamFields.weaknesses || evaluation?.weaknesses || ''}</ReactMarkdown>
+                  </div>
                 </div>
               )}
-              {evaluation.improvements && (
+              {(streamFields.improvements || evaluation?.improvements) && (
                 <div>
                   <Text style={{ color: '#1677ff' }}>💡 改进建议：</Text>
-                  <Paragraph style={{ margin: '4px 0' }}>{evaluation.improvements}</Paragraph>
+                  <div style={{ margin: '4px 0', lineHeight: 1.8 }}>
+                    <ReactMarkdown>{streamFields.improvements || evaluation?.improvements || ''}</ReactMarkdown>
+                  </div>
                 </div>
               )}
             </div>
           </div>
 
-          {evaluation.reference && (
+          {(streamFields.reference || evaluation?.reference) && (
             <Collapse
-              items={[
-                {
-                  key: 'reference',
-                  label: '查看参考答案',
-                  children: <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{evaluation.reference}</Paragraph>,
-                },
-              ]}
+              items={[{
+                key: 'reference',
+                label: '查看参考答案',
+                children: <div style={{ lineHeight: 1.8 }}><ReactMarkdown>{streamFields.reference || evaluation?.reference || ''}</ReactMarkdown></div>,
+              }]}
               style={{ background: '#fafafa' }}
             />
           )}
