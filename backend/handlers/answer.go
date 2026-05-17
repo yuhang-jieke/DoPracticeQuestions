@@ -326,8 +326,6 @@ func SubmitAnswerStream(c *gin.Context) {
 		return
 	}
 
-	finalScore = clampScore(finalScore)
-
 	if hasExisting {
 		oldScore := existing.Score
 		oldContent := existing.Content
@@ -382,9 +380,3 @@ func SubmitAnswerStream(c *gin.Context) {
 	writeEvent("done", string(doneData))
 }
 
-func clampScore(s float64) float64 {
-	if s <= 0 {
-		return 5
-	}
-	return s
-}

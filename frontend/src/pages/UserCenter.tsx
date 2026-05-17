@@ -35,32 +35,80 @@ const UserCenter: React.FC = () => {
   const [pwdForm] = Form.useForm();
   const { message } = App.useApp();
 
+  const [answerPage, setAnswerPage] = useState(1);
+  const [wrongPage, setWrongPage] = useState(1);
+  const [bookmarkPage, setBookmarkPage] = useState(1);
+  const [uploadPage, setUploadPage] = useState(1);
+  const [answerTotal, setAnswerTotal] = useState(0);
+  const [wrongTotal, setWrongTotal] = useState(0);
+  const [bookmarkTotal, setBookmarkTotal] = useState(0);
+  const [uploadTotal, setUploadTotal] = useState(0);
+
+  const fetchAnswers = (page: number) => {
+    userAPI.getAnswers({ page, page_size: 20 }).then((res) => {
+      setAnswers(res.data.answers);
+      setAnswerTotal(res.data.total);
+      setAnswerPage(res.data.page);
+    });
+  };
+
+  const fetchWrongAnswers = (page: number) => {
+    userAPI.getWrongAnswers({ page, page_size: 20 }).then((res) => {
+      setWrongAnswers(res.data.answers);
+      setWrongTotal(res.data.total);
+      setWrongPage(res.data.page);
+    });
+  };
+
+  const fetchBookmarks = (page: number) => {
+    userAPI.getBookmarks({ page, page_size: 20 }).then((res) => {
+      setBookmarks(res.data.bookmarks);
+      setBookmarkTotal(res.data.total);
+      setBookmarkPage(res.data.page);
+    });
+  };
+
+  const fetchUploads = (page: number) => {
+    userAPI.getUploads({ page, page_size: 20 }).then((res) => {
+      setUploads(res.data.questions || []);
+      setUploadTotal(res.data.total);
+      setUploadPage(res.data.page);
+    });
+  };
+
   useEffect(() => {
     setLoading(true);
+    const isUploader = user?.role === 'teacher' || user?.role === 'director' || user?.role === 'principal';
     Promise.allSettled([
-      userAPI.getAnswers(),
-      userAPI.getWrongAnswers(),
-      userAPI.getBookmarks(),
+      userAPI.getAnswers({ page: 1, page_size: 20 }),
+      userAPI.getWrongAnswers({ page: 1, page_size: 20 }),
+      userAPI.getBookmarks({ page: 1, page_size: 20 }),
       userAPI.getStats(),
-      (user?.role === 'teacher' || user?.role === 'director' || user?.role === 'principal'
-        ? userAPI.getUploads()
-        : Promise.resolve({ data: { questions: [] } })),
+      isUploader ? userAPI.getUploads({ page: 1, page_size: 20 }) : Promise.resolve({ data: { questions: [], total: 0, page: 1, page_size: 20 } }),
       userAPI.getAIConfig(),
     ]).then((results) => {
       if (results[0].status === 'fulfilled') {
-        setAnswers(results[0].value.data.answers);
+        const d = results[0].value.data;
+        setAnswers(d.answers);
+        setAnswerTotal(d.total);
       }
       if (results[1].status === 'fulfilled') {
-        setWrongAnswers(results[1].value.data.answers);
+        const d = results[1].value.data;
+        setWrongAnswers(d.answers);
+        setWrongTotal(d.total);
       }
       if (results[2].status === 'fulfilled') {
-        setBookmarks(results[2].value.data.bookmarks);
+        const d = results[2].value.data;
+        setBookmarks(d.bookmarks);
+        setBookmarkTotal(d.total);
       }
       if (results[3].status === 'fulfilled') {
         setStats(results[3].value.data);
       }
       if (results[4].status === 'fulfilled') {
-        setUploads(results[4].value.data.questions || []);
+        const d = results[4].value.data;
+        setUploads(d.questions || []);
+        setUploadTotal(d.total);
       }
       if (results[5].status === 'fulfilled') {
         setHasAIConfig(results[5].value.data.has_config);
@@ -83,6 +131,7 @@ const UserCenter: React.FC = () => {
       await questionAPI.delete(id);
       message.success(`题目「${title}」已删除`);
       setUploads((prev) => prev.filter((q) => q.id !== id));
+      setUploadTotal((prev) => prev - 1);
     } catch (err: any) { message.error(err.response?.data?.error || '删除失败'); }
   };
 
@@ -100,10 +149,17 @@ const UserCenter: React.FC = () => {
     }
   };
 
-  const renderAnswerList = (data: UserAnswer[], emptyText: string) => (
+  const renderAnswerList = (data: UserAnswer[], emptyText: string, page: number, total: number, onPageChange: (page: number) => void) => (
     <List
       dataSource={data}
       locale={{ emptyText }}
+      pagination={total > 20 ? {
+        current: page,
+        pageSize: 20,
+        total,
+        onChange: onPageChange,
+        showSizeChanger: false,
+      } : false}
       renderItem={(item) => (
         <List.Item
           style={{ cursor: 'pointer' }}
@@ -167,21 +223,28 @@ const UserCenter: React.FC = () => {
     },
     {
       key: 'answers',
-      label: <span><EditOutlined /> 我的回答 ({answers.length})</span>,
-      children: renderAnswerList(answers, '还没有回答过题目'),
+      label: <span><EditOutlined /> 我的回答 ({answerTotal})</span>,
+      children: renderAnswerList(answers, '还没有回答过题目', answerPage, answerTotal, fetchAnswers),
     },
     {
       key: 'wrong',
-      label: <span><CloseCircleOutlined style={{ color: '#ff4d4f' }} /> 我的错题 ({wrongAnswers.length})</span>,
-      children: renderAnswerList(wrongAnswers, '太棒了！没有需要改进的题目'),
+      label: <span><CloseCircleOutlined style={{ color: '#ff4d4f' }} /> 我的错题 ({wrongTotal})</span>,
+      children: renderAnswerList(wrongAnswers, '太棒了！没有需要改进的题目', wrongPage, wrongTotal, fetchWrongAnswers),
     },
     {
       key: 'bookmarks',
-      label: <span><StarOutlined style={{ color: '#faad14' }} /> 我的收藏 ({bookmarks.length})</span>,
+      label: <span><StarOutlined style={{ color: '#faad14' }} /> 我的收藏 ({bookmarkTotal})</span>,
       children: (
         <List
           dataSource={bookmarks}
           locale={{ emptyText: '还没有收藏题目' }}
+          pagination={bookmarkTotal > 20 ? {
+            current: bookmarkPage,
+            pageSize: 20,
+            total: bookmarkTotal,
+            onChange: fetchBookmarks,
+            showSizeChanger: false,
+          } : false}
           renderItem={(item: any) => (
             <List.Item
               style={{ cursor: 'pointer' }}
@@ -208,11 +271,18 @@ const UserCenter: React.FC = () => {
     },
     ...(user?.role === 'teacher' || user?.role === 'director' || user?.role === 'principal' ? [{
       key: 'uploads',
-      label: <span><UploadOutlined /> 我上传的题目 ({uploads.length})</span>,
+      label: <span><UploadOutlined /> 我上传的题目 ({uploadTotal})</span>,
       children: (
         <List
           dataSource={uploads}
           locale={{ emptyText: '还没有上传题目，去首页上传吧' }}
+          pagination={uploadTotal > 20 ? {
+            current: uploadPage,
+            pageSize: 20,
+            total: uploadTotal,
+            onChange: fetchUploads,
+            showSizeChanger: false,
+          } : false}
           renderItem={(item: Question) => (
             <List.Item
               style={{ cursor: 'pointer' }}

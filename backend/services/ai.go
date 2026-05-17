@@ -9,8 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -27,12 +25,17 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+type ResponseFormat struct {
+	Type string `json:"type"`
+}
+
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens"`
-	Temperature float64   `json:"temperature"`
-	Stream      bool      `json:"stream"`
+	Model          string          `json:"model"`
+	Messages       []Message       `json:"messages"`
+	MaxTokens      int             `json:"max_tokens"`
+	Temperature    float64         `json:"temperature"`
+	Stream         bool            `json:"stream"`
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 }
 
 type ChatResponse struct {
@@ -134,7 +137,36 @@ func (c *AIConfig) EvaluateAnswer(req *AIRequest) (*AIEvaluationResult, error) {
 	if c.UseMock {
 		return c.mockEvaluation(req)
 	}
-	return c.realEvaluation(req)
+	var result AIEvaluationResult
+	err := c.EvaluateAnswerStream(req, func(ev StreamEvent) error {
+		switch ev.Type {
+		case "score":
+			if m, ok := ev.Data.(map[string]interface{}); ok {
+				if s, ok := m["score"].(float64); ok {
+					result.Score = s
+				}
+			}
+		case "chunk":
+			if m, ok := ev.Data.(map[string]interface{}); ok {
+				f, _ := m["field"].(string)
+				t, _ := m["text"].(string)
+				switch f {
+				case "analysis":
+					result.Analysis += t
+				case "strengths":
+					result.Strengths += t
+				case "weaknesses":
+					result.Weaknesses += t
+				case "improvements":
+					result.Improvements += t
+				case "reference":
+					result.Reference += t
+				}
+			}
+		}
+		return nil
+	})
+	return &result, err
 }
 
 func (c *AIConfig) EvaluateRaw(prompt string) (string, error) {
@@ -175,9 +207,7 @@ func (c *AIConfig) EvaluateRaw(prompt string) (string, error) {
 		log.Printf("解析AI响应失败 | URL: %s | Content-Type: %s | Body前200字符: %.200s", c.APIURL, ct, string(respBody))
 		return "", fmt.Errorf("AI接口返回了非预期的数据格式")
 	}
-	if len(chatResp.Choices) == 0 {
-		return "", fmt.Errorf("AI无响应")
-	}
+
 	return chatResp.Choices[0].Message.Content, nil
 }
 
@@ -226,135 +256,6 @@ func (c *AIConfig) ClassifyQuestion(title, tags string, categories []string) (*C
 	return &result, nil
 }
 
-func buildPrompt(req *AIRequest) string {
-	techType := "技术"
-	if req.QuestionType == "non-tech" {
-		techType = "非技术"
-	}
-
-	prompt := fmt.Sprintf(`你是一个专业的面试官，请评估以下面试回答。
-
-## 题目信息
-- 题目：%s
-- 详细内容：%s
-- 题目类型：%s
-
-## 用户的回答：
-%s
-`,
-		req.QuestionTitle, req.QuestionContent, techType, req.UserAnswer)
-
-	if req.IsEdit && req.PreviousAnswer != "" {
-		prompt += fmt.Sprintf(`
-## 用户之前的回答（编辑前的版本）：
-%s
-`, req.PreviousAnswer)
-		if req.PreviousScore != nil {
-			prompt += fmt.Sprintf("## 用户之前的评分：%.1f/10\n", *req.PreviousScore)
-		}
-		prompt += `
-请注意比较两次回答的差异，如果这次回答不如之前，要明确指出哪些方面退步了。
-`
-	}
-
-	if req.QuestionType == "non-tech" {
-		prompt += `
-请按照企业级面试标准进行评估，侧重以下维度：
-1. 完整性：回答是否全面覆盖了问题要点
-2. 逻辑性：表达是否清晰有条理
-3. 说服力：回答是否有说服力
-4. 专业性：是否使用了恰当的职场表达
-5. STAR法则运用：情境、任务、行动、结果是否清晰
-
-请给出具体的面试回答建议和范例话术。
-`
-	} else {
-		prompt += `
-请按照技术面试标准进行评估，侧重以下维度：
-1. 准确性：技术点是否正确
-2. 深度：理解是否深入
-3. 广度：是否考虑了相关知识点
-4. 结构化：表达是否清晰有条理
-
-综合分析多位优秀回答后，给出一个高质量的参考答案。
-`
-	}
-
-	prompt += `
-请以JSON格式返回评估结果，格式严格如下：
-{
-  "score": <1-10的整数或小数>,
-  "analysis": "综合分析评价",
-  "strengths": "回答的优点",
-  "weaknesses": "回答的不足和改进建议",
-  "reference_answer": "综合优秀回答给出的参考答案",
-  "improvements": "具体的改进建议"
-}
-
-评分标准参考：
-- 9-10分：回答极其出色，深入浅出，结构完美，有独到见解
-- 7-8分：回答优秀，内容准确全面，条理清晰
-- 5-6分：回答基本正确，覆盖了核心知识点，但深度或广度不足
-- 3-4分：回答有部分正确内容，但存在明显不足或缺失
-- 1-2分：回答偏离题目或内容非常有限
-
-注意：7分代表"良好合格的回答"，符合面试基本要求即可给予7分以上。请严格输出JSON，不要带markdown代码块标记。
-`
-	return prompt
-}
-
-func (c *AIConfig) realEvaluation(req *AIRequest) (*AIEvaluationResult, error) {
-	prompt := buildPrompt(req)
-
-	chatReq := ChatRequest{
-		Model: c.Model,
-		Messages: []Message{
-			{Role: "system", Content: "你是一个专业的面试评估助手，擅长评估面试回答质量并给出建设性建议。"},
-			{Role: "user", Content: prompt},
-		},
-		MaxTokens:   2048,
-		Temperature: 0.7,
-		Stream:      false,
-	}
-
-	body, _ := json.Marshal(chatReq)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.APIURL, bytes.NewReader(body))
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
-
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("AI请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	ct := resp.Header.Get("Content-Type")
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("AI接口返回错误 (状态码 %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	if strings.Contains(ct, "text/html") {
-		return nil, fmt.Errorf("AI接口返回了网页而非API数据，请检查API地址配置")
-	}
-
-	var chatResp ChatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		log.Printf("解析AI响应失败 | URL: %s | Content-Type: %s | Body前200字符: %.200s", c.APIURL, ct, string(respBody))
-		return nil, fmt.Errorf("AI接口返回了非预期的数据格式")
-	}
-
-	if len(chatResp.Choices) == 0 {
-		return nil, fmt.Errorf("AI无响应，请检查模型名称 '%s' 是否在该服务商中可用", c.Model)
-	}
-
-	return parseEvaluation(chatResp.Choices[0].Message.Content)
-}
-
 func (c *AIConfig) mockEvaluation(req *AIRequest) (*AIEvaluationResult, error) {
 	score := 7.5
 	if req.QuestionType == "non-tech" {
@@ -378,159 +279,12 @@ func (c *AIConfig) mockEvaluation(req *AIRequest) (*AIEvaluationResult, error) {
 	}, nil
 }
 
-func parseEvaluation(content string) (*AIEvaluationResult, error) {
-	var result AIEvaluationResult
-	if err := json.Unmarshal([]byte(content), &result); err == nil {
-		return &result, nil
-	}
-
-	cleaned := content
-	if len(content) > 7 {
-		start := -1
-		end := -1
-		for i := 0; i < len(content)-3; i++ {
-			if content[i] == '{' {
-				start = i
-				break
-			}
-		}
-		for i := len(content) - 1; i >= 0; i-- {
-			if content[i] == '}' {
-				end = i + 1
-				break
-			}
-		}
-		if start >= 0 && end > start {
-			cleaned = content[start:end]
-		}
-	}
-
-	if err := json.Unmarshal([]byte(cleaned), &result); err == nil {
-		return &result, nil
-	}
-
-	return &AIEvaluationResult{
-		Score:      5.0,
-		Analysis:   "AI评估完成",
-		Strengths:  "请参考详细分析",
-		Weaknesses: "请参考详细分析",
-		Reference:  "参考答案生成中...",
-	}, nil
-}
-
-// ──────────── streaming evaluation ────────────
-
 type StreamEvent struct {
 	Type string
 	Data interface{}
 }
 
 type StreamCallback func(event StreamEvent) error
-
-type streamParser struct {
-	fullText    strings.Builder
-	sentLen     int
-	currSection string
-	scoreSent   bool
-	score       float64
-	isQualified bool
-}
-
-var (
-	scoreLineRe = regexp.MustCompile(`得分[：:][^\n]*|合格[：:][^\n]*`)
-	sectionRe   = regexp.MustCompile(`✅\s*优点[：:]?\s*|📌\s*不足[：:]?\s*|💡\s*改进建议[：:]?\s*|💡\s*改进[：:]?\s*|综合分析[：:]?\s*|参考答案[：:]?\s*|##(?:✅|📌|💡)\S*|\s*##\s*|#{1,3}\s*(?:✅|📌|💡)?\s*(?:综合分析|优点|不足|改进建议|参考答案)[：:]?\s*|[一二三四五]、\s*(?:✅|📌|💡)?\s*(?:综合分析|优点|不足|改进建议|参考答案)[：:]?\s*|✅|📌|💡|优点\d+\.?\s*|不足\d+\.?\s*|建议\d+\.?\s*`)
-	scoreRe     = regexp.MustCompile(`得分[：:]\s*(\d+(?:\.\d+)?)`)
-	cleanHashRe = regexp.MustCompile(`(^|\n)\s*##\s*`)
-)
-
-func filterMarkers(text string) string {
-	text = scoreLineRe.ReplaceAllString(text, "")
-	text = sectionRe.ReplaceAllString(text, "")
-	text = cleanHashRe.ReplaceAllString(text, "$1")
-	return strings.TrimSpace(text)
-}
-
-func extractScore(text string) (float64, bool) {
-	m := scoreRe.FindStringSubmatch(text)
-	if m == nil {
-		return 0, false
-	}
-	s, err := strconv.ParseFloat(m[1], 64)
-	return s, err == nil
-}
-
-func lastSectionHead(text string) string {
-	markers := []struct {
-		key   string
-		field string
-	}{
-		{"综合分析", "analysis"},
-		{"✅ 优点", "strengths"}, {"优点", "strengths"},
-		{"📌 不足", "weaknesses"}, {"不足", "weaknesses"},
-		{"💡 改进建议", "improvements"}, {"改进建议", "improvements"},
-		{"参考答案", "reference"},
-	}
-	last := ""
-	lastIdx := -1
-	for _, m := range markers {
-		if idx := strings.LastIndex(text, m.key); idx > lastIdx {
-			lastIdx = idx
-			last = m.field
-		}
-	}
-	return last
-}
-
-func (p *streamParser) feed(chunk string) []StreamEvent {
-	p.fullText.WriteString(chunk)
-	text := p.fullText.String()
-	var events []StreamEvent
-
-	if !p.scoreSent {
-		if s, ok := extractScore(text); ok {
-			p.score = s
-			p.isQualified = s >= 7
-			p.scoreSent = true
-			events = append(events, StreamEvent{
-				Type: "score",
-				Data: map[string]interface{}{"score": s, "is_qualified": p.isQualified},
-			})
-		}
-	}
-
-	lastHead := lastSectionHead(text)
-	if lastHead != "" {
-		p.currSection = lastHead
-	}
-
-	lastNL := strings.LastIndex(text, "\n")
-	if lastNL < 0 || lastNL < p.sentLen {
-		return events
-	}
-	end := lastNL + 1
-	raw := text[p.sentLen:end]
-	p.sentLen = end
-
-	filtered := filterMarkers(raw)
-	if filtered != "" {
-		events = append(events, StreamEvent{
-			Type: "chunk",
-			Data: map[string]interface{}{"field": p.currSection, "text": filtered},
-		})
-	}
-
-	return events
-}
-
-func (p *streamParser) done() StreamEvent {
-	return StreamEvent{
-		Type: "done",
-		Data: map[string]interface{}{
-			"score":        p.score,
-			"is_qualified": p.isQualified,
-		},
-	}
-}
 
 func (c *AIConfig) EvaluateAnswerStream(req *AIRequest, cb StreamCallback) error {
 	if c.UseMock {
@@ -542,11 +296,12 @@ func (c *AIConfig) EvaluateAnswerStream(req *AIRequest, cb StreamCallback) error
 func (c *AIConfig) realStreamEvaluation(req *AIRequest, cb StreamCallback) error {
 	prompt := buildStreamPrompt(req)
 	chatReq := ChatRequest{
-		Model:       c.Model,
-		Messages:    []Message{{Role: "system", Content: "你是一个专业的面试评估助手，擅长评估面试回答质量并给出建设性建议。"}, {Role: "user", Content: prompt}},
-		MaxTokens:   4096,
-		Temperature: 0.7,
-		Stream:      true,
+		Model:          c.Model,
+		Messages:       []Message{{Role: "user", Content: prompt}},
+		MaxTokens:      4096,
+		Temperature:    0.3,
+		Stream:         true,
+		ResponseFormat: &ResponseFormat{Type: "json_object"},
 	}
 	body, _ := json.Marshal(chatReq)
 
@@ -568,7 +323,7 @@ func (c *AIConfig) realStreamEvaluation(req *AIRequest, cb StreamCallback) error
 		return fmt.Errorf("AI接口返回错误 (状态码 %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	parser := &streamParser{currSection: "analysis"}
+	var fullText strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 4096), 256*1024)
 
@@ -598,23 +353,23 @@ func (c *AIConfig) realStreamEvaluation(req *AIRequest, cb StreamCallback) error
 		if chunk == "" {
 			continue
 		}
-		for _, ev := range parser.feed(chunk) {
-			if err := cb(ev); err != nil {
-				return err
-			}
-		}
+		fullText.WriteString(chunk)
 	}
 
-	// Flush buffered text then signal done
-	for _, ev := range parser.feed("\n") {
-		if err := cb(ev); err != nil {
-			return err
-		}
+	raw := fullText.String()
+	result, err := parseEvaluationJSON(raw)
+	if err != nil {
+		log.Printf("AI评估JSON解析失败: %v | 原始输出: %.300s", err, raw)
+		return fmt.Errorf("AI返回了非预期的数据格式，请重试")
 	}
-	if err := cb(parser.done()); err != nil {
-		return err
-	}
-	return nil
+
+	result.Analysis = stripTitlePrefix(result.Analysis)
+	result.Strengths = reorderItems(stripTitlePrefix(result.Strengths))
+	result.Weaknesses = reorderItems(stripTitlePrefix(result.Weaknesses))
+	result.Improvements = reorderItems(stripTitlePrefix(result.Improvements))
+	result.Reference = stripTitlePrefix(result.Reference)
+
+	return emitJSONResult(result, cb)
 }
 
 func (c *AIConfig) mockStreamEvaluation(req *AIRequest, cb StreamCallback) error {
@@ -623,44 +378,26 @@ func (c *AIConfig) mockStreamEvaluation(req *AIRequest, cb StreamCallback) error
 		score = 6.5
 	}
 
-	sections := []struct {
-		field string
-		text  string
-	}{
-		{"score", fmt.Sprintf("得分：%.1f\n合格：%s\n", score, map[bool]string{true: "是", false: "否"}[score >= 7])},
-		{"analysis", "综合分析\n您的回答整体思路清晰，覆盖了主要知识点，对比往期回答表现稳定。\n\n"},
-		{"strengths", "✅ 优点\n1. 准确性高：概念定义准确，核心特性无错误\n2. 深度突出：延伸底层原理与运行机制\n3. 广度优秀：覆盖多场景与业务选型\n4. 结构化良好：逻辑递进清晰\n\n"},
-		{"weaknesses", "📌 不足\n1. 部分描述偏理论，缺少举例\n2. 未提及性能隐患与并发风险\n3. 高阶场景内容较概括\n\n"},
-		{"improvements", "💡 改进建议\n1. 补充1-2个贴合业务的实操案例\n2. 补充机制存在的性能问题与异常风险\n3. 完善高阶场景的具体实现细节\n\n"},
-		{"reference", "参考答案\n这是AI综合多位优秀回答生成的参考答案，建议从原理、应用场景、优缺点三个维度展开。\n"},
+	var analysis string
+	if req.IsEdit {
+		analysis = fmt.Sprintf("这是您编辑后的版本。与之前版本（%.1f分）相比，本次回答在结构上有所改进，但在关键点的阐述上还可以更加深入。", *req.PreviousScore)
+	} else {
+		analysis = "您的回答整体思路清晰，覆盖了主要知识点。建议在深度和具体实例方面进一步丰富。"
 	}
 
-	for _, sec := range sections {
-		if sec.field == "score" {
-			ev := StreamEvent{Type: "score", Data: map[string]interface{}{"score": score, "is_qualified": score >= 7}}
-			if err := cb(ev); err != nil {
-				return err
-			}
-			continue
-		}
-		runes := []rune(sec.text)
-		for i := 0; i < len(runes); i += 3 {
-			end := i + 3
-			if end > len(runes) {
-				end = len(runes)
-			}
-			chunk := string(runes[i:end])
-			ev := StreamEvent{Type: "chunk", Data: map[string]interface{}{"field": sec.field, "text": chunk}}
-			if err := cb(ev); err != nil {
-				return err
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+	result := &AIEvaluationResult{
+		Score:        score,
+		Analysis:     analysis,
+		Strengths:    "1. 准确性高：概念定义准确\n2. 深度突出：延伸底层原理\n3. 广度优秀：覆盖多场景\n4. 结构化良好：逻辑递进清晰",
+		Weaknesses:   "1. 部分描述偏理论，缺少举例\n2. 未提及性能隐患与并发风险\n3. 高阶场景内容较概括",
+		Improvements: "1. 补充贴合业务的实操案例\n2. 补充机制存在的性能问题与异常风险\n3. 完善高阶场景的具体实现细节",
+		Reference:    "这是AI综合多位优秀回答生成的参考答案，建议从原理、应用场景、优缺点三个维度展开回答。",
 	}
 
-	return cb(StreamEvent{Type: "done", Data: map[string]interface{}{"score": score, "is_qualified": score >= 7}})
+	return emitJSONResult(result, cb)
 }
 
+// ====================== 修复格式问题的核心：提示词 ======================
 func buildStreamPrompt(req *AIRequest) string {
 	techType := "技术"
 	if req.QuestionType == "non-tech" {
@@ -668,34 +405,146 @@ func buildStreamPrompt(req *AIRequest) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("你是专业的面试评估助手。请评估以下面试回答。\n\n")
-	sb.WriteString(fmt.Sprintf("## 题目\n%s\n\n", req.QuestionTitle))
-	sb.WriteString(fmt.Sprintf("## 题目详情\n%s\n\n", req.QuestionContent))
-	sb.WriteString(fmt.Sprintf("## 题目类型\n%s\n\n", techType))
-	sb.WriteString(fmt.Sprintf("## 用户回答\n%s\n\n", req.UserAnswer))
+	sb.WriteString("你是资深专业面试官，客观公正评估用户面试回答，**严格只输出纯标准JSON格式**，严禁输出JSON之外任何多余内容、注释、解释、markdown代码块、表情符号、自定义标题。\n\n")
 
+	// 定义固定JSON结构，不约束条目数量
+	sb.WriteString(`输出JSON结构严格如下：
+{
+  "score": 分数(1-10区间，保留一位小数),
+  "analysis": "一句话综合评价，概括回答整体水平、准确性与完整度",
+  "strengths": "根据回答实际亮点自由撰写，有几条写几条，无需凑数，每条单独换行，以数字1.开头独立编号",
+  "weaknesses": "根据回答真实存在问题如实撰写，问题多则多写，少则少写，不强行凑条数，每条单独换行，以数字1.开头独立编号",
+  "improvements": "严格对应不足逐条给出改进方案，有几条不足就写几条建议，逐条匹配，每条单独换行，以数字1.开头独立编号",
+  "reference_answer": "贴合题目考点撰写标准面试回答，篇幅自由，简单题精简、复杂题详实，适合口头作答"
+}
+`)
+
+	// 核心强制规则
+	sb.WriteString("\n执行硬性规则：\n")
+	sb.WriteString("1. strengths、weaknesses、improvements 三者互相独立，各自编号均从1重新开始，禁止跨列表延续序号\n")
+	sb.WriteString("2. 所有字段内容内，**绝对禁止出现：综合分析、优点、不足、改进建议、参考答案**这类标题文字\n")
+	sb.WriteString("3. 不固定任何条目数量，完全依据用户回答质量自适应生成内容条数\n")
+	sb.WriteString("4. 内容禁止使用JSON非法特殊字符，标点统一使用中文标点\n")
+	sb.WriteString("5. 仅返回纯净JSON字符串，无任何前缀后缀多余文字\n\n")
+
+	// 传入答题上下文
+	sb.WriteString(fmt.Sprintf("面试题目：%s\n题目详情：%s\n题目类型：%s\n考生回答内容：%s\n\n",
+		req.QuestionTitle, req.QuestionContent, techType, req.UserAnswer))
+
+	// 编辑对比内容
 	if req.IsEdit && req.PreviousAnswer != "" {
-		sb.WriteString(fmt.Sprintf("## 用户之前的回答\n%s\n\n", req.PreviousAnswer))
+		sb.WriteString(fmt.Sprintf("考生上一轮作答内容：%s\n\n", req.PreviousAnswer))
 		if req.PreviousScore != nil {
-			sb.WriteString(fmt.Sprintf("之前评分：%.1f/10。请注意对比两次差异。\n\n", *req.PreviousScore))
+			sb.WriteString(fmt.Sprintf("上一轮评估得分：%.1f/10，请对比两次作答差异优化评估\n\n", *req.PreviousScore))
 		}
 	}
 
-	evalDims := "准确性、深度、广度、结构化"
-	if req.QuestionType == "non-tech" {
-		evalDims = "完整性、逻辑性、说服力、专业性、STAR法则运用"
+	return sb.String()
+}
+
+// ======================================================================
+
+func parseEvaluationJSON(raw string) (*AIEvaluationResult, error) {
+	var result AIEvaluationResult
+
+	raw = strings.TrimSpace(raw)
+	if start := strings.Index(raw, "{"); start != -1 {
+		if end := strings.LastIndex(raw, "}"); end != -1 && end > start {
+			raw = raw[start : end+1]
+		}
 	}
 
-	sb.WriteString(fmt.Sprintf("评估维度：%s。\n\n", evalDims))
-	sb.WriteString("请严格按以下格式输出（不要输出JSON，禁止使用Markdown标记如##）：\n\n")
-	sb.WriteString("得分：<只写一个1-10的数字，不要写/10>\n")
-	sb.WriteString("合格：<只写是或否>\n\n")
-	sb.WriteString("综合分析\n<整体评价，直接写正文>\n\n")
-	sb.WriteString("✅ 优点\n1. xxx（每条换行，数字前不写任何文字）\n2. xxx\n3. xxx\n4. xxx\n\n")
-	sb.WriteString("📌 不足\n1. xxx\n2. xxx\n3. xxx\n\n")
-	sb.WriteString("💡 改进建议\n1. xxx\n2. xxx\n3. xxx\n\n")
-	sb.WriteString("参考答案\n<直接写内容>\n\n")
-	sb.WriteString("严格禁止：\n- 段落间或末尾不要加单独的✅📌💡\n- 编号仅写\"1.\"\"2.\"格式，前面不许加任何文字（禁止写\"优点1.\"\"不足2.\"\"建议3.\"）\n- 每个编号项占独立一行\n- 任何位置不写##\n- 标题不加冒号\n- 得分只写数字禁止写\"9.0/10\"")
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
 
+func reorderItems(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	var items []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		content := trimmed
+		for i, r := range trimmed {
+			if r >= '0' && r <= '9' || r == ' ' || r == '.' || r == '、' || r == ')' || r == '-' {
+				continue
+			}
+			content = trimmed[i:]
+			break
+		}
+		items = append(items, strings.TrimSpace(content))
+	}
+
+	var sb strings.Builder
+	for i, item := range items {
+		if item == "" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("%d. %s", i+1, item))
+		if i < len(items)-1 {
+			sb.WriteString("\n")
+		}
+	}
 	return sb.String()
+}
+
+var titlePrefixes = []string{
+	"综合分析", "✅ 优点", "✅优点", "📌 不足", "📌不足",
+	"💡 改进建议", "💡改进建议", "💡 改进", "💡改进",
+	"📝 参考答案", "📝参考答案", "得分", "合格",
+	"：", ":",
+}
+
+func stripTitlePrefix(text string) string {
+	trimmed := strings.TrimSpace(text)
+	for _, prefix := range titlePrefixes {
+		trimmed = strings.TrimPrefix(trimmed, prefix)
+	}
+	return strings.TrimSpace(trimmed)
+}
+
+func emitJSONResult(result *AIEvaluationResult, cb StreamCallback) error {
+	isQualified := result.Score >= 7
+
+	if err := cb(StreamEvent{
+		Type: "score",
+		Data: map[string]interface{}{"score": result.Score, "is_qualified": isQualified},
+	}); err != nil {
+		return err
+	}
+
+	sections := []struct {
+		field string
+		text  string
+	}{
+		{"analysis", result.Analysis + "\n"},
+		{"strengths", result.Strengths + "\n"},
+		{"weaknesses", result.Weaknesses + "\n"},
+		{"improvements", result.Improvements + "\n"},
+		{"reference", result.Reference + "\n"},
+	}
+
+	for _, sec := range sections {
+		runes := []rune(sec.text)
+		for i := 0; i < len(runes); i += 3 {
+			end := i + 3
+			if end > len(runes) {
+				end = len(runes)
+			}
+			ev := StreamEvent{
+				Type: "chunk",
+				Data: map[string]interface{}{"field": sec.field, "text": string(runes[i:end])},
+			}
+			if err := cb(ev); err != nil {
+				return err
+			}
+		}
+	}
+
+	return cb(StreamEvent{Type: "done", Data: nil})
 }

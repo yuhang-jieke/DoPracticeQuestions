@@ -10,7 +10,7 @@ import {
   Progress,
   List,
   Tooltip,
-  Modal,
+  Drawer,
   Collapse,
   Alert,
   App,
@@ -63,7 +63,8 @@ const QuestionDetail: React.FC = () => {
   const [bookmarked, setBookmarked] = useState(false);
 
   // Comments
-  const [commentModal, setCommentModal] = useState<number | null>(null);
+  const [commentDrawer, setCommentDrawer] = useState<number | null>(null);
+  const [commentAnswerUser, setCommentAnswerUser] = useState('');
   const [comments, setComments] = useState<Record<number, CommentType[]>>({});
   const [newComment, setNewComment] = useState('');
   const [listening, setListening] = useState(false);
@@ -233,20 +234,31 @@ const QuestionDetail: React.FC = () => {
     message.success(res.data.bookmarked ? '已收藏' : '已取消收藏');
   };
 
-  const handleShowComments = async (answerId: number) => {
-    setCommentModal(answerId);
+  const handleShowComments = async (answerId: number, username: string) => {
+    setCommentDrawer(answerId);
+    setCommentAnswerUser(username);
     if (!comments[answerId]) {
       const res = await topAnswerAPI.getComments(answerId);
       setComments((prev) => ({ ...prev, [answerId]: res.data.comments }));
     }
   };
 
+  const handleCloseComments = () => {
+    if (commentDrawer !== null) {
+      const count = (comments[commentDrawer] || []).length;
+      setTopAnswers((prev) =>
+        prev.map((ta) => (ta.id === commentDrawer ? { ...ta, comments_count: count } : ta))
+      );
+    }
+    setCommentDrawer(null);
+  };
+
   const handleAddComment = async () => {
-    if (!newComment.trim() || commentModal === null) return;
-    await topAnswerAPI.addComment(commentModal, newComment);
+    if (!newComment.trim() || commentDrawer === null) return;
+    await topAnswerAPI.addComment(commentDrawer, newComment);
     setNewComment('');
-    const res = await topAnswerAPI.getComments(commentModal);
-    setComments((prev) => ({ ...prev, [commentModal!]: res.data.comments }));
+    const res = await topAnswerAPI.getComments(commentDrawer);
+    setComments((prev) => ({ ...prev, [commentDrawer!]: res.data.comments }));
     message.success('评论成功');
   };
 
@@ -427,7 +439,7 @@ const QuestionDetail: React.FC = () => {
                     <Button
                       type="text"
                       icon={<MessageOutlined />}
-                      onClick={() => handleShowComments(item.id)}
+                      onClick={() => handleShowComments(item.id, item.is_anonymous ? '匿名用户' : item.user?.username || '用户')}
                     >
                       {item.comments_count}
                     </Button>,
@@ -471,42 +483,58 @@ const QuestionDetail: React.FC = () => {
         </Card>
       )}
 
-      {/* Comments Modal */}
-      <Modal
-        title="评论"
-        open={commentModal !== null}
-        onCancel={() => setCommentModal(null)}
-        footer={null}
-        width={500}
+      {/* Comments Drawer */}
+      <Drawer
+        title={`评论 (@${commentAnswerUser})`}
+        open={commentDrawer !== null}
+        onClose={handleCloseComments}
+        width={420}
       >
-        {commentModal !== null && (
-          <div>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          <div style={{ flex: 1, overflow: 'auto' }}>
             <List
-              dataSource={comments[commentModal] || []}
-              locale={{ emptyText: '暂无评论' }}
+              dataSource={comments[commentDrawer!] || []}
+              locale={{ emptyText: '暂无评论，快来发表第一条吧' }}
               renderItem={(c: CommentType) => (
-                <List.Item>
+                <List.Item style={{ padding: '12px 0' }}>
                   <List.Item.Meta
-                    title={<Text strong>{c.user?.username}</Text>}
-                    description={c.content}
+                    avatar={
+                      <div style={{
+                        width: 32, height: 32, borderRadius: '50%',
+                        background: '#1677ff', color: '#fff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 14, fontWeight: 600,
+                      }}>
+                        {(c.user?.username || '?')[0].toUpperCase()}
+                      </div>
+                    }
+                    title={
+                      <Space>
+                        <Text strong>{c.user?.username || '用户'}</Text>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          {new Date(c.created_at).toLocaleString('zh-CN')}
+                        </Text>
+                      </Space>
+                    }
+                    description={<Paragraph style={{ margin: '4px 0 0', whiteSpace: 'pre-wrap' }}>{c.content}</Paragraph>}
                   />
                 </List.Item>
               )}
-              style={{ marginBottom: 16 }}
             />
-            <Space style={{ width: '100%' }}>
+          </div>
+          <div style={{ padding: '12px 0 0', borderTop: '1px solid #f0f0f0' }}>
+            <Space.Compact style={{ width: '100%' }}>
               <Input
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
                 placeholder="输入评论..."
                 onPressEnter={handleAddComment}
-                style={{ flex: 1 }}
               />
               <Button type="primary" onClick={handleAddComment}>发表</Button>
-            </Space>
+            </Space.Compact>
           </div>
-        )}
-      </Modal>
+        </div>
+      </Drawer>
     </div>
   );
 };
